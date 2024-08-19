@@ -9,7 +9,7 @@
 #define HEIGHT GetSystemMetrics(SM_CYSCREEN)
 #define WIDTH  GetSystemMetrics(SM_CXSCREEN)
 
- 
+
 
 
 //<----------- no need to change below this point ----------->
@@ -32,6 +32,8 @@ D3DCOLOR currentColor = white;
 #include <iostream>
 #include <iomanip> // std::setprecision
 #include <chrono> //used for time
+#include <vector>
+#include <algorithm>
 D3DCOLOR currentColor = black;
 D3DCOLOR red = D3DCOLOR(0x00FF0000);
 D3DCOLOR green = D3DCOLOR(0x0000FF00);
@@ -42,7 +44,8 @@ auto redStartTime = redToGreenTime;
 int state = 0; //0 stats screen, 1 red waiting screen, 2 green
 int errors = 0;
 int click = 0;
-long long lastClick, minClick = 999999999999, maxClick = 0, averageClick = 0, clickSum = 0, clickAmount = 0;
+std::vector<int64_t> clickTimes;
+int64_t clickAmount;
 #endif
 
 #ifdef USETHREADS
@@ -76,78 +79,95 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 		GetRawInputData((HRAWINPUT)lParam, RID_INPUT, raw_buf, &cb_size, sizeofRAWINPUTHEADER);
 
-			if (raw_buf->header.dwType == RIM_TYPEMOUSE &&
-				(raw_buf->data.mouse.usButtonFlags == RI_MOUSE_LEFT_BUTTON_DOWN ||
-					raw_buf->data.mouse.usButtonFlags == RI_MOUSE_RIGHT_BUTTON_DOWN)) { //only triggers once per button press
+		if (raw_buf->header.dwType == RIM_TYPEMOUSE &&
+			(raw_buf->data.mouse.usButtonFlags == RI_MOUSE_LEFT_BUTTON_DOWN ||
+				raw_buf->data.mouse.usButtonFlags == RI_MOUSE_RIGHT_BUTTON_DOWN)) { //only triggers once per button press
 #ifdef MODEZERO
-				if (currentColor == white)
-					currentColor = black;
-				else
-					currentColor = white;
-#endif
-#ifndef MODEZERO
-				if (state == 0) {
-					system("CLS"); //clear console
-					state = 1;
-					currentColor = red;
-					//pick a time to transition screen from red to green
-					int rnd = rand() % 1000 + 3000; //(between 3 and 4 seconds)
-					auto now = std::chrono::high_resolution_clock::now();
-					redToGreenTime = now + std::chrono::milliseconds(rnd);
-					redStartTime = now;
-				}
-				else if (state == 1) { //too early click
-					auto now = std::chrono::high_resolution_clock::now();
-					auto timeDiff = now - redStartTime;
-					if (std::chrono::duration_cast<std::chrono::microseconds>(timeDiff).count() >= 500000) { //grace period for double clicks
-						state = 0;
-						currentColor = black;
-						errors++;
-					}
-				}
-				else if (state == 2) {
+			if (currentColor == white)
+				currentColor = black;
+			else
+				currentColor = white;
+#else
+			if (state == 0) {
+				state = 1;
+				currentColor = red;
+				//pick a time to transition screen from red to green
+				int rnd = rand() % 3000 + 1000; //(between 1 and 4 seconds)
+				auto now = std::chrono::high_resolution_clock::now();
+				redToGreenTime = now + std::chrono::milliseconds(rnd);
+				redStartTime = now;
+			}
+			else if (state == 1) { //too early click
+				auto now = std::chrono::high_resolution_clock::now();
+				auto timeDiff = now - redStartTime;
+				if (std::chrono::duration_cast<std::chrono::microseconds>(timeDiff).count() >= 500000) { //grace period for double clicks
 					state = 0;
 					currentColor = black;
-					greenClickTime = std::chrono::high_resolution_clock::now();
-					auto timeDiff = greenClickTime - greenStartTime;
-					lastClick = std::chrono::duration_cast<std::chrono::microseconds>(timeDiff).count();
-					if (lastClick < minClick) minClick = lastClick;
-					if (lastClick > maxClick) maxClick = lastClick;
-					clickSum += lastClick;
-					clickAmount++;
-					averageClick = clickSum / clickAmount;
-
-					std::cout << "\n";
-					std::cout << "  last click: " << std::fixed << std::setprecision(1) << (double)lastClick / 1000 << " ms\n";
-					std::cout << "  min click: " << (double)minClick / 1000 << " ms\n";
-					std::cout << "  max click: " << (double)maxClick / 1000 << " ms\n";
-					std::cout << "  average click: " << (double)averageClick / 1000 << " ms\n";
-					std::cout << "  successful clicks: " << clickAmount << "\n";
-					std::cout << "  early clicks: " << errors << "\n";
+					errors++;
 				}
-#endif
 			}
+			else if (state == 2) {
+				state = 0;
+				currentColor = black;
+				greenClickTime = std::chrono::high_resolution_clock::now();
+				auto timeDiff = greenClickTime - greenStartTime;
+				int64_t clickTime = std::chrono::duration_cast<std::chrono::microseconds>(timeDiff).count();
+				clickTimes.push_back(clickTime);
+				std::cout << "Successful Click #" << clickAmount + 1 << ": " << clickTime / 1000.0 << "ms\n";
+				clickAmount++;
+			}
+#endif
+		}
 
 #ifndef MODEZERO
-			if (raw_buf->header.dwType == RIM_TYPEKEYBOARD) {
+		if (raw_buf->header.dwType == RIM_TYPEKEYBOARD) {
 #endif
-				if (raw_buf->data.keyboard.Message == WM_KEYDOWN || raw_buf->data.keyboard.Message == WM_SYSKEYDOWN)
+			if (raw_buf->data.keyboard.Message == WM_KEYDOWN || raw_buf->data.keyboard.Message == WM_SYSKEYDOWN)
 #ifdef MODEZERO
-					if (raw_buf->data.keyboard.VKey == 0x57)  // W key
-						currentColor = white;
-					else if (raw_buf->data.keyboard.VKey == 0x42)  // B key
-						currentColor = black;
-					else 
+				if (raw_buf->data.keyboard.VKey == 0x57)  // W key
+					currentColor = white;
+				else if (raw_buf->data.keyboard.VKey == 0x42)  // B key
+					currentColor = black;
+				else
 #endif
-						if (raw_buf->data.keyboard.VKey == 0x1B) {  // ESC key
+					if (raw_buf->data.keyboard.VKey == 0x1B) {  // ESC key
+#ifndef MODEZERO
+						sort(clickTimes.begin(), clickTimes.end());
+
+						size_t size = clickTimes.size();
+
+						int64_t sum = 0;
+						for (int64_t clickTime : clickTimes) {
+							sum += clickTime;
+						}
+
+						int64_t average = sum / size;
+
+						// stdev
+						double standard_deviation = 0.0;
+
+						for (int64_t clickTime : clickTimes) {
+							standard_deviation += pow(clickTime - average, 2);
+						}
+
+						double stdev = sqrt(standard_deviation / (size - 1));
+
+						std::cout << "\nMax: " << clickTimes.back() / 1000.0 << "ms\n";
+						std::cout << "Avg: " << average / 1000.0 << "ms\n";
+						std::cout << "Min: " << clickTimes.front() / 1000.0 << "ms\n";
+						std::cout << "STDEV: " << stdev / 1000.0 << "\n";
+						std::cout << "Total Clicks: " << clickAmount + errors << "\n";
+						std::cout << "Successful Clicks: " << clickAmount << "\n";
+						std::cout << "Early Clicks: " << errors << "\n";
+#endif
 						stop = TRUE;
 						break;
 					}
-		
+
 #ifndef MODEZERO
 		}
 #endif
-		if (GET_RAWINPUT_CODE_WPARAM(wParam) == RIM_INPUT) 
+		if (GET_RAWINPUT_CODE_WPARAM(wParam) == RIM_INPUT)
 			DefWindowProc(hWnd, msg, wParam, lParam); //The application must call DefWindowProc so the system can perform cleanup.
 		break;
 	}
@@ -170,6 +190,10 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 int main() //for console purposes.
 {
+#ifndef MODEZERO
+	srand(static_cast<unsigned>(time(0))); // use time as seed
+	std::cout << std::fixed << std::setprecision(2);
+#endif
 	int ret = WinMain(GetModuleHandle(NULL), NULL, NULL, SW_SHOWNORMAL);
 	return ret;
 }
@@ -259,14 +283,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 	Keyboard.hwndTarget = hWnd;
 	if (!RegisterRawInputDevices(&Keyboard, 1, sizeof(RAWINPUTDEVICE))) return -1;
 
-//#ifndef MODEZERO
+	//#ifndef MODEZERO
 	RAWINPUTDEVICE Mouse;
 	Mouse.usUsagePage = 0x01;
 	Mouse.usUsage = 0x02; //mouse
 	Mouse.dwFlags = RIDEV_NOLEGACY;
 	Mouse.hwndTarget = hWnd;
 	if (!RegisterRawInputDevices(&Mouse, 1, sizeof(RAWINPUTDEVICE))) return -1;
-//#endif
+	//#endif
 
 	ShowCursor(FALSE);
 	SetCursor(NULL);
@@ -309,7 +333,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 	//Process.GetCurrentProcess().ProcessorAffinity = new IntPtr(2); // Use only the second core 
 	//Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.RealTime; // Set highest process priority
 	//Thread.CurrentThread.Priority = ThreadPriority.Highest; // Set highest thread priority
-	
+
 #ifdef USETHREADS
 	std::thread renderThread; //declare a thread without launching it
 	renderThread = std::thread(renderFunc, d3ddev); //this launches the thread
@@ -331,8 +355,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 #endif
 
 	d3ddev->Release();   //release d3d
-	d3d->Release(); 
-	
+	d3d->Release();
+
 	free(raw_buf);
 
 	DestroyWindow(hWnd);
